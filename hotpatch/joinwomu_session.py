@@ -266,21 +266,40 @@ def _solve_cloudflare_turnstile(target_url: str = f"{BASE_URL}/tv/3.html") -> di
     port = _get_free_port()
     tmpdir = tempfile.mkdtemp(prefix="unich_jw_")
     proc = None
-
     try:
+        startupinfo = None
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 6  # SW_MINIMIZE
+
+        cmd = [
+            browser_exe,
+            f"--remote-debugging-port={port}",
+            "--remote-allow-origins=*",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-fre",
+            "--disable-features=msFirstRunExperience,msEdgeWelcomePage,msImplicitSignIn",
+            "--disable-search-engine-choice-screen",
+            "--disable-extensions",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--mute-audio",
+            "--hide-scrollbars",
+            f"--user-data-dir={tmpdir}",
+            "--window-position=-32000,-32000",
+            "--window-size=1280,900",
+            target_url,
+        ]
+
         proc = subprocess.Popen(
-            [
-                browser_exe,
-                f"--remote-debugging-port={port}",
-                "--remote-allow-origins=*",
-                "--disable-extensions",
-                "--disable-default-apps",
-                f"--user-data-dir={tmpdir}",
-                "--window-size=1280,900",
-                target_url,
-            ],
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            startupinfo=startupinfo,
         )
 
         pages = None
@@ -329,8 +348,9 @@ def _solve_cloudflare_turnstile(target_url: str = f"{BASE_URL}/tv/3.html") -> di
         if res_ua and res_ua.get("result", {}).get("value"):
             browser_ua = res_ua["result"]["value"]
 
-        # Get Cookies
-        res_cookies = _cdp_call(ws_url, "Network.getCookies", {"urls": [BASE_URL]}, timeout=5)
+        # Get Cookies across root and image subdomains
+        cookie_urls = [BASE_URL, f"{BASE_URL}/", "https://www.joinwomu.com", "https://img.joinwomu.com"]
+        res_cookies = _cdp_call(ws_url, "Network.getCookies", {"urls": cookie_urls}, timeout=5)
         cookies_list = res_cookies.get("cookies", []) if res_cookies else []
         cookie_dict = {c["name"]: c["value"] for c in cookies_list if "name" in c and "value" in c}
 
