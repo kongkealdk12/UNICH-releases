@@ -15,13 +15,39 @@ import tempfile
 import time
 import requests
 
-try:
-    from .. import config
-except (ImportError, ValueError):
+import sys
+
+# Safe config resolution for both dev environment and Nuitka compiled binary
+config = sys.modules.get('AIVideoTranslator.config') or sys.modules.get('config')
+if not config:
     try:
-        from . import config
+        import AIVideoTranslator.config as config
     except (ImportError, ValueError):
-        import config
+        try:
+            from .. import config
+        except (ImportError, ValueError):
+            try:
+                from . import config
+            except (ImportError, ValueError):
+                try:
+                    import config
+                except (ImportError, ValueError):
+                    config = None
+
+if not config:
+    class _FallbackConfig:
+        UNICH_BASE_URL = 'https://api.nisay.store/v1'
+        NISAY_BASE_URL = 'https://api.nisay.store/v1'
+        UNICH_ROTATE_POOL = [
+            'gemini-3.8-flash-high',
+            'gemini-3.7-flash-high',
+            'gpt-5.6-terra',
+            'gemini-3.6-flash-high',
+            'gpt-5.6-luna'
+        ]
+        NISAY_ROTATE_POOL = UNICH_ROTATE_POOL
+        UPDATE_REPO = 'kongkealdk12/UNICH-releases'
+    config = _FallbackConfig()
 
 UNICH_DEFAULT_BASE_URL = getattr(config, 'UNICH_BASE_URL', getattr(config, 'NISAY_BASE_URL', 'https://api.nisay.store/v1'))
 NISAY_DEFAULT_BASE_URL = UNICH_DEFAULT_BASE_URL
@@ -715,96 +741,118 @@ def _apply_joinwomu_runtime_hotpatch():
                     t = threading.Thread(target=_warm, name="joinwomu-hotpatch-warmup", daemon=True)
                     t.start()
                 jw_sess.warm_session_async = warm_session_async
+
+            # Register in sys.modules for any future imports
+            sys.modules['bypass.joinwomu.session'] = jw_sess
+            sys.modules['AIVideoTranslator.bypass.joinwomu.session'] = jw_sess
     except Exception:
         pass
 
-    # 3. Patch core.downloader.fetch_poster_bytes
+    # 3. Patch core.downloader.fetch_poster_bytes across all namespaces
     try:
-        try:
-            from core import downloader
-        except Exception:
-            try:
-                from AIVideoTranslator.core import downloader
-            except Exception:
-                downloader = None
-
-        if downloader is not None and hasattr(downloader, "fetch_poster_bytes"):
-            _orig_fetch_poster = downloader.fetch_poster_bytes
-
-            def _patched_fetch_poster_bytes(url: str):
-                parsed = url.lower()
-                if "joinwomu" in parsed:
-                    try:
-                        try:
-                            from bypass.joinwomu.session import fetch_joinwomu_image
-                        except Exception:
-                            from AIVideoTranslator.bypass.joinwomu.session import fetch_joinwomu_image
-                        content, content_type = fetch_joinwomu_image(url, timeout=15)
-                        if content:
-                            detected = downloader._sniff_image_content_type(content) if hasattr(downloader, "_sniff_image_content_type") else ""
-                            return content, detected or content_type
-                    except Exception:
-                        raise
-                return _orig_fetch_poster(url)
-
-            _patched_fetch_poster_bytes._unich_hotpatched = True
-            if not getattr(downloader.fetch_poster_bytes, "_unich_hotpatched", False):
-                downloader.fetch_poster_bytes = _patched_fetch_poster_bytes
-    except Exception:
-        pass
-
-    # 4. Patch ui.dl_workspace.CardPosterTask.run
-    try:
-        try:
-            from ui import dl_workspace
-        except Exception:
-            try:
-                from AIVideoTranslator.ui import dl_workspace
-            except Exception:
-                dl_workspace = None
-
-        if dl_workspace is not None and hasattr(dl_workspace, "CardPosterTask"):
-            _orig_run = dl_workspace.CardPosterTask.run
-
-            def _patched_task_run(self):
+        downloaders = []
+        for mod_name in ("core.downloader", "AIVideoTranslator.core.downloader"):
+            mod = sys.modules.get(mod_name)
+            if not mod:
                 try:
-                    if getattr(self, "url", None) and "joinwomu" in str(self.url).lower():
-                        try:
-                            try:
-                                from bypass.joinwomu.session import is_session_ready, wait_for_session
-                            except Exception:
-                                from AIVideoTranslator.bypass.joinwomu.session import is_session_ready, wait_for_session
-                            if not is_session_ready():
-                                if not wait_for_session(timeout=45.0):
-                                    return
-                        except Exception:
-                            pass
+                    mod = __import__(mod_name, fromlist=["downloader"])
                 except Exception:
                     pass
-                return _orig_run(self)
+            if mod and mod not in downloaders:
+                downloaders.append(mod)
 
-            _patched_task_run._unich_hotpatched = True
-            if not getattr(dl_workspace.CardPosterTask.run, "_unich_hotpatched", False):
-                dl_workspace.CardPosterTask.run = _patched_task_run
+        for dl_mod in downloaders:
+            if hasattr(dl_mod, "fetch_poster_bytes"):
+                _orig_fetch = dl_mod.fetch_poster_bytes
 
-        if dl_workspace is not None and hasattr(dl_workspace, "DLWorkspace"):
-            _orig_load_catalog = dl_workspace.DLWorkspace._load_catalog
-
-            def _patched_load_catalog(self, platform_key: str, word: str = "", category: str | None = None):
-                if platform_key == "joinwomu":
-                    try:
+                def _patched_fetch(url: str, _orig=_orig_fetch, _dl=dl_mod):
+                    parsed = url.lower()
+                    if "joinwomu" in parsed:
                         try:
-                            from bypass.joinwomu.session import warm_session_async
+                            content = None
+                            content_type = ""
+                            if jw_sess and hasattr(jw_sess, "fetch_joinwomu_image"):
+                                content, content_type = jw_sess.fetch_joinwomu_image(url, timeout=15)
+                            else:
+                                try:
+                                    from bypass.joinwomu.session import fetch_joinwomu_image
+                                except Exception:
+                                    from AIVideoTranslator.bypass.joinwomu.session import fetch_joinwomu_image
+                                content, content_type = fetch_joinwomu_image(url, timeout=15)
+                            if content:
+                                detected = _dl._sniff_image_content_type(content) if hasattr(_dl, "_sniff_image_content_type") else ""
+                                return content, detected or content_type
                         except Exception:
-                            from AIVideoTranslator.bypass.joinwomu.session import warm_session_async
-                        warm_session_async()
+                            raise
+                    return _orig(url)
+
+                _patched_fetch._unich_hotpatched = True
+                dl_mod.fetch_poster_bytes = _patched_fetch
+    except Exception:
+        pass
+
+    # 4. Patch ui.dl_workspace across all namespaces
+    try:
+        dl_workspaces = []
+        for mod_name in ("ui.dl_workspace", "AIVideoTranslator.ui.dl_workspace"):
+            mod = sys.modules.get(mod_name)
+            if not mod:
+                try:
+                    mod = __import__(mod_name, fromlist=["dl_workspace"])
+                except Exception:
+                    pass
+            if mod and mod not in dl_workspaces:
+                dl_workspaces.append(mod)
+
+        for dlw in dl_workspaces:
+            if hasattr(dlw, "CardPosterTask"):
+                _orig_run = dlw.CardPosterTask.run
+
+                def _patched_task_run(self, _orig=_orig_run):
+                    try:
+                        if getattr(self, "url", None) and "joinwomu" in str(self.url).lower():
+                            try:
+                                if jw_sess and hasattr(jw_sess, "is_session_ready"):
+                                    if not jw_sess.is_session_ready():
+                                        if hasattr(jw_sess, "wait_for_session") and not jw_sess.wait_for_session(timeout=45.0):
+                                            return
+                                else:
+                                    try:
+                                        from bypass.joinwomu.session import is_session_ready, wait_for_session
+                                    except Exception:
+                                        from AIVideoTranslator.bypass.joinwomu.session import is_session_ready, wait_for_session
+                                    if not is_session_ready():
+                                        if not wait_for_session(timeout=45.0):
+                                            return
+                            except Exception:
+                                pass
                     except Exception:
                         pass
-                return _orig_load_catalog(self, platform_key, word=word, category=category)
+                    return _orig(self)
 
-            _patched_load_catalog._unich_hotpatched = True
-            if not getattr(dl_workspace.DLWorkspace._load_catalog, "_unich_hotpatched", False):
-                dl_workspace.DLWorkspace._load_catalog = _patched_load_catalog
+                _patched_task_run._unich_hotpatched = True
+                dlw.CardPosterTask.run = _patched_task_run
+
+            if hasattr(dlw, "DLWorkspace"):
+                _orig_load_catalog = dlw.DLWorkspace._load_catalog
+
+                def _patched_load_catalog(self, platform_key: str, word: str = "", category: str | None = None, _orig=_orig_load_catalog):
+                    if platform_key == "joinwomu":
+                        try:
+                            if jw_sess and hasattr(jw_sess, "warm_session_async"):
+                                jw_sess.warm_session_async()
+                            else:
+                                try:
+                                    from bypass.joinwomu.session import warm_session_async
+                                except Exception:
+                                    from AIVideoTranslator.bypass.joinwomu.session import warm_session_async
+                                warm_session_async()
+                        except Exception:
+                            pass
+                    return _orig(self, platform_key, word=word, category=category)
+
+                _patched_load_catalog._unich_hotpatched = True
+                dlw.DLWorkspace._load_catalog = _patched_load_catalog
     except Exception:
         pass
 
