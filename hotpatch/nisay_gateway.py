@@ -693,15 +693,43 @@ def _apply_joinwomu_runtime_hotpatch():
 
     # 2. Patch bypass.joinwomu.session if loaded or importable
     try:
+        jw_sess = None
         try:
-            from bypass.joinwomu import session as jw_sess
+            import joinwomu_session as jw_sess
         except Exception:
+            pass
+        if jw_sess is None:
             try:
-                from AIVideoTranslator.bypass.joinwomu import session as jw_sess
+                from bypass.joinwomu import session as jw_sess
             except Exception:
-                jw_sess = None
+                try:
+                    from AIVideoTranslator.bypass.joinwomu import session as jw_sess
+                except Exception:
+                    jw_sess = None
 
         if jw_sess is not None:
+            import types
+            # Register in sys.modules for any future imports
+            sys.modules['bypass.joinwomu.session'] = jw_sess
+            sys.modules['AIVideoTranslator.bypass.joinwomu.session'] = jw_sess
+            sys.modules['joinwomu_session'] = jw_sess
+
+            # Also mount as complete bypass.joinwomu provider module so core.catalog and UI find all functions
+            if 'bypass' not in sys.modules:
+                sys.modules['bypass'] = types.ModuleType('bypass')
+            sys.modules['bypass'].joinwomu = jw_sess
+            sys.modules['bypass.joinwomu'] = jw_sess
+            sys.modules['bypass.joinwomu.catalog'] = jw_sess
+            if 'AIVideoTranslator.bypass' not in sys.modules:
+                sys.modules['AIVideoTranslator.bypass'] = sys.modules['bypass']
+            sys.modules['AIVideoTranslator.bypass'].joinwomu = jw_sess
+            sys.modules['AIVideoTranslator.bypass.joinwomu'] = jw_sess
+            sys.modules['AIVideoTranslator.bypass.joinwomu.catalog'] = jw_sess
+
+            # Cross-reference submodules on jw_sess itself
+            jw_sess.session = jw_sess
+            jw_sess.catalog = jw_sess
+
             # Ensure _session_ready event exists
             if not hasattr(jw_sess, "_session_ready"):
                 jw_sess._session_ready = threading.Event()
@@ -741,10 +769,6 @@ def _apply_joinwomu_runtime_hotpatch():
                     t = threading.Thread(target=_warm, name="joinwomu-hotpatch-warmup", daemon=True)
                     t.start()
                 jw_sess.warm_session_async = warm_session_async
-
-            # Register in sys.modules for any future imports
-            sys.modules['bypass.joinwomu.session'] = jw_sess
-            sys.modules['AIVideoTranslator.bypass.joinwomu.session'] = jw_sess
     except Exception:
         pass
 
@@ -856,6 +880,81 @@ def _apply_joinwomu_runtime_hotpatch():
     except Exception:
         pass
 
+    # 5. Patch core.translator to NEVER crash with ('NoneType' object has no attribute 'transcribe')
+    try:
+        translators = []
+        for mod_name in ("core.translator", "AIVideoTranslator.core.translator"):
+            mod = sys.modules.get(mod_name)
+            if not mod:
+                try:
+                    mod = __import__(mod_name, fromlist=["translator"])
+                except Exception:
+                    pass
+            if mod and mod not in translators:
+                translators.append(mod)
+
+        for tr_mod in translators:
+            if hasattr(tr_mod, "VideoTranslator"):
+                VT = tr_mod.VideoTranslator
+
+                # Patch _transcribe so that model is GUARANTEED to never be None
+                if not getattr(VT._transcribe, "_unich_hotpatched", False):
+                    _orig_transcribe = VT._transcribe
+
+                    def _patched_transcribe(self, model, audio_path, language=None, _orig=_orig_transcribe):
+                        if model is None:
+                            self._ensure_device()
+                            model = getattr(VT, '_cached_model', None)
+                            if model is None:
+                                print("[HotPatch] Local Whisper model was None during fallback — loading now...")
+                                self._update_progress("Loading AI speech model on CPU/GPU…", 25)
+                                model = self._load_model()
+                                VT._cached_model = model
+                                VT._cached_model_size = self.model_size
+                                VT._cached_model_device = self.device
+                        return _orig(self, model, audio_path, language=language)
+
+                    _patched_transcribe._unich_hotpatched = True
+                    VT._transcribe = _patched_transcribe
+
+                if not getattr(VT.prepare_for_batch, "_unich_hotpatched", False):
+                    _orig_pfb = VT.prepare_for_batch
+
+                    def _patched_pfb(self, force=False, _orig=_orig_pfb):
+                        if force:
+                            self._ensure_device()
+                            if (getattr(VT, '_cached_model', None) is None
+                                    or getattr(VT, '_cached_model_size', None) != self.model_size
+                                    or getattr(VT, '_cached_model_device', None) != self.device):
+                                VT._cached_model = self._load_model()
+                                VT._cached_model_size = self.model_size
+                                VT._cached_model_device = self.device
+                            return VT._cached_model
+                        return _orig(self, force=force)
+
+                    _patched_pfb._unich_hotpatched = True
+                    VT.prepare_for_batch = _patched_pfb
+
+                if hasattr(VT, "_rescue_gaps") and not getattr(VT._rescue_gaps, "_unich_hotpatched", False):
+                    _orig_rg = VT._rescue_gaps
+
+                    def _patched_rescue_gaps(self, model, *args, **kwargs):
+                        if model is None:
+                            self._ensure_device()
+                            model = getattr(VT, '_cached_model', None)
+                            if model is None:
+                                model = self._load_model()
+                                VT._cached_model = model
+                                VT._cached_model_size = self.model_size
+                                VT._cached_model_device = self.device
+                        return _orig_rg(self, model, *args, **kwargs)
+
+                    _patched_rescue_gaps._unich_hotpatched = True
+                    VT._rescue_gaps = _patched_rescue_gaps
+    except Exception:
+        pass
+
 
 # Automatically execute the hotpatch at import / module load
 _apply_joinwomu_runtime_hotpatch()
+
