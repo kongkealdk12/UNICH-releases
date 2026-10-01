@@ -1,6 +1,7 @@
 {
-  "version": "6.5.3",
+  "version": "6.5.4",
   "files": {
-    "nisay_gateway.py": "nisay_gateway.py"
+    "nisay_gateway.py": "nisay_gateway.py",
+    "joinwomu_session.py": "joinwomu_session.py"
   }
 }
