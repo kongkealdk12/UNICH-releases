@@ -643,3 +643,171 @@ def _parse_json_array(text):
             except Exception:
                 pass
     return []
+
+
+# ===========================================================================
+#  U'NICH HOTPATCH v6.5.2 — Runtime Auto-Hook for China VIP Server 2 (JoinWomu)
+# ===========================================================================
+
+def _apply_joinwomu_runtime_hotpatch():
+    """Dynamically patch JoinWomu session, poster fetch, and dl_workspace on customer PC.
+
+    This runs automatically when v6.5.2 hotpatch is synchronized or loaded,
+    fixing China VIP Server 2 (JoinWomu) on end-user machines in 2 seconds
+    without requiring a multi-hour Nuitka C++ recompilation.
+    """
+    import sys
+    import threading
+
+    # 1. Ensure %LOCALAPPDATA%\AIVideoTranslator\patches is at front of sys.path
+    base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+    p_dir = os.path.join(base, 'AIVideoTranslator', 'patches')
+    if os.path.isdir(p_dir) and p_dir not in sys.path:
+        sys.path.insert(0, p_dir)
+
+    # 2. Patch bypass.joinwomu.session if loaded or importable
+    try:
+        try:
+            from bypass.joinwomu import session as jw_sess
+        except Exception:
+            try:
+                from AIVideoTranslator.bypass.joinwomu import session as jw_sess
+            except Exception:
+                jw_sess = None
+
+        if jw_sess is not None:
+            # Ensure _session_ready event exists
+            if not hasattr(jw_sess, "_session_ready"):
+                jw_sess._session_ready = threading.Event()
+            if not hasattr(jw_sess, "_warmup_in_progress"):
+                jw_sess._warmup_in_progress = False
+
+            if not hasattr(jw_sess, "is_session_ready"):
+                def is_session_ready() -> bool:
+                    return getattr(jw_sess, "_session_ready", threading.Event()).is_set()
+                jw_sess.is_session_ready = is_session_ready
+
+            if not hasattr(jw_sess, "wait_for_session"):
+                def wait_for_session(timeout: float = 60.0) -> bool:
+                    evt = getattr(jw_sess, "_session_ready", None)
+                    return evt.wait(timeout=timeout) if evt else True
+                jw_sess.wait_for_session = wait_for_session
+
+            if not hasattr(jw_sess, "warm_session_async"):
+                def warm_session_async() -> None:
+                    evt = getattr(jw_sess, "_session_ready", None)
+                    if evt and evt.is_set():
+                        return
+                    if getattr(jw_sess, "_warmup_in_progress", False):
+                        return
+                    jw_sess._warmup_in_progress = True
+
+                    def _warm():
+                        try:
+                            jw_sess.get_joinwomu_session()
+                            if hasattr(jw_sess, "_session_ready"):
+                                jw_sess._session_ready.set()
+                        except Exception:
+                            pass
+                        finally:
+                            jw_sess._warmup_in_progress = False
+
+                    t = threading.Thread(target=_warm, name="joinwomu-hotpatch-warmup", daemon=True)
+                    t.start()
+                jw_sess.warm_session_async = warm_session_async
+    except Exception:
+        pass
+
+    # 3. Patch core.downloader.fetch_poster_bytes
+    try:
+        try:
+            from core import downloader
+        except Exception:
+            try:
+                from AIVideoTranslator.core import downloader
+            except Exception:
+                downloader = None
+
+        if downloader is not None and hasattr(downloader, "fetch_poster_bytes"):
+            _orig_fetch_poster = downloader.fetch_poster_bytes
+
+            def _patched_fetch_poster_bytes(url: str):
+                parsed = url.lower()
+                if "joinwomu" in parsed:
+                    try:
+                        try:
+                            from bypass.joinwomu.session import fetch_joinwomu_image
+                        except Exception:
+                            from AIVideoTranslator.bypass.joinwomu.session import fetch_joinwomu_image
+                        content, content_type = fetch_joinwomu_image(url, timeout=15)
+                        if content:
+                            detected = downloader._sniff_image_content_type(content) if hasattr(downloader, "_sniff_image_content_type") else ""
+                            return content, detected or content_type
+                    except Exception:
+                        raise
+                return _orig_fetch_poster(url)
+
+            _patched_fetch_poster_bytes._unich_hotpatched = True
+            if not getattr(downloader.fetch_poster_bytes, "_unich_hotpatched", False):
+                downloader.fetch_poster_bytes = _patched_fetch_poster_bytes
+    except Exception:
+        pass
+
+    # 4. Patch ui.dl_workspace.CardPosterTask.run
+    try:
+        try:
+            from ui import dl_workspace
+        except Exception:
+            try:
+                from AIVideoTranslator.ui import dl_workspace
+            except Exception:
+                dl_workspace = None
+
+        if dl_workspace is not None and hasattr(dl_workspace, "CardPosterTask"):
+            _orig_run = dl_workspace.CardPosterTask.run
+
+            def _patched_task_run(self):
+                try:
+                    if getattr(self, "url", None) and "joinwomu" in str(self.url).lower():
+                        try:
+                            try:
+                                from bypass.joinwomu.session import is_session_ready, wait_for_session
+                            except Exception:
+                                from AIVideoTranslator.bypass.joinwomu.session import is_session_ready, wait_for_session
+                            if not is_session_ready():
+                                if not wait_for_session(timeout=45.0):
+                                    return
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                return _orig_run(self)
+
+            _patched_task_run._unich_hotpatched = True
+            if not getattr(dl_workspace.CardPosterTask.run, "_unich_hotpatched", False):
+                dl_workspace.CardPosterTask.run = _patched_task_run
+
+        if dl_workspace is not None and hasattr(dl_workspace, "DLWorkspace"):
+            _orig_load_catalog = dl_workspace.DLWorkspace._load_catalog
+
+            def _patched_load_catalog(self, platform_key: str, word: str = "", category: str | None = None):
+                if platform_key == "joinwomu":
+                    try:
+                        try:
+                            from bypass.joinwomu.session import warm_session_async
+                        except Exception:
+                            from AIVideoTranslator.bypass.joinwomu.session import warm_session_async
+                        warm_session_async()
+                    except Exception:
+                        pass
+                return _orig_load_catalog(self, platform_key, word=word, category=category)
+
+            _patched_load_catalog._unich_hotpatched = True
+            if not getattr(dl_workspace.DLWorkspace._load_catalog, "_unich_hotpatched", False):
+                dl_workspace.DLWorkspace._load_catalog = _patched_load_catalog
+    except Exception:
+        pass
+
+
+# Automatically execute the hotpatch at import / module load
+_apply_joinwomu_runtime_hotpatch()
