@@ -714,15 +714,40 @@ def _apply_joinwomu_runtime_hotpatch():
             sys.modules['AIVideoTranslator.bypass.joinwomu.session'] = jw_sess
             sys.modules['joinwomu_session'] = jw_sess
 
-            # Also mount as complete bypass.joinwomu provider module so core.catalog and UI find all functions
-            if 'bypass' not in sys.modules:
-                sys.modules['bypass'] = types.ModuleType('bypass')
-            sys.modules['bypass'].joinwomu = jw_sess
+            # Also mount as complete bypass.joinwomu provider module so core.catalog and UI find all functions.
+            # CRITICAL: Always resolve or preserve the real bypass package so submodules
+            # (anyreel, dramabox, reelshort, etc.) are never obscured by a bare ModuleType stub.
+            bypass_mod = sys.modules.get('AIVideoTranslator.bypass') or sys.modules.get('bypass')
+            if bypass_mod is None or not hasattr(bypass_mod, '__path__'):
+                try:
+                    from AIVideoTranslator import bypass as bypass_mod
+                except Exception:
+                    try:
+                        import bypass as bypass_mod
+                    except Exception:
+                        bypass_mod = None
+
+            if bypass_mod is not None:
+                bypass_mod.joinwomu = jw_sess
+                if 'bypass' not in sys.modules or not hasattr(sys.modules['bypass'], '__path__'):
+                    sys.modules['bypass'] = bypass_mod
+                if 'AIVideoTranslator.bypass' not in sys.modules or not hasattr(sys.modules['AIVideoTranslator.bypass'], '__path__'):
+                    sys.modules['AIVideoTranslator.bypass'] = bypass_mod
+            else:
+                dummy_bypass = types.ModuleType('bypass')
+                _this_dir = os.path.dirname(os.path.abspath(__file__))
+                for _c in (os.path.join(_this_dir, '..', 'bypass'), os.path.join(p_dir, '..', 'bypass')):
+                    if os.path.isdir(_c):
+                        dummy_bypass.__path__ = [os.path.abspath(_c)]
+                        break
+                dummy_bypass.joinwomu = jw_sess
+                if 'bypass' not in sys.modules or not hasattr(sys.modules['bypass'], '__path__'):
+                    sys.modules['bypass'] = dummy_bypass
+                if 'AIVideoTranslator.bypass' not in sys.modules or not hasattr(sys.modules['AIVideoTranslator.bypass'], '__path__'):
+                    sys.modules['AIVideoTranslator.bypass'] = dummy_bypass
+
             sys.modules['bypass.joinwomu'] = jw_sess
             sys.modules['bypass.joinwomu.catalog'] = jw_sess
-            if 'AIVideoTranslator.bypass' not in sys.modules:
-                sys.modules['AIVideoTranslator.bypass'] = sys.modules['bypass']
-            sys.modules['AIVideoTranslator.bypass'].joinwomu = jw_sess
             sys.modules['AIVideoTranslator.bypass.joinwomu'] = jw_sess
             sys.modules['AIVideoTranslator.bypass.joinwomu.catalog'] = jw_sess
 
@@ -786,6 +811,30 @@ def _apply_joinwomu_runtime_hotpatch():
                 downloaders.append(mod)
 
         for dl_mod in downloaders:
+            if jw_sess is not None:
+                dl_mod.joinwomu = jw_sess
+                if hasattr(dl_mod, "_get_joinwomu_drama_info"):
+                    def _patched_get_jw_info(url: str, _jw=jw_sess, _dl=dl_mod):
+                        info = _jw.fetch_joinwomu_info(url)
+                        return _dl._normalise_provider_info(info, "JoinWomu Drama")
+                    dl_mod._get_joinwomu_drama_info = _patched_get_jw_info
+
+                if hasattr(dl_mod, "get_drama_info"):
+                    _orig_gdi = dl_mod.get_drama_info
+                    def _patched_gdi(url: str, _orig=_orig_gdi, _jw=jw_sess, _dl=dl_mod):
+                        if _jw.is_joinwomu_url(url):
+                            return _dl._get_joinwomu_drama_info(url)
+                        return _orig(url)
+                    dl_mod.get_drama_info = _patched_gdi
+
+                if hasattr(dl_mod, "get_episode_video_url"):
+                    _orig_gevu = dl_mod.get_episode_video_url
+                    def _patched_gevu(episode_url: str, episode: dict | None = None, _orig=_orig_gevu, _jw=jw_sess):
+                        if _jw.is_joinwomu_url(episode_url):
+                            return _jw.get_joinwomu_episode_video_url(episode_url, episode)
+                        return _orig(episode_url, episode=episode)
+                    dl_mod.get_episode_video_url = _patched_gevu
+
             if hasattr(dl_mod, "fetch_poster_bytes"):
                 _orig_fetch = dl_mod.fetch_poster_bytes
 
@@ -807,6 +856,25 @@ def _apply_joinwomu_runtime_hotpatch():
                                 detected = _dl._sniff_image_content_type(content) if hasattr(_dl, "_sniff_image_content_type") else ""
                                 return content, detected or content_type
                         except Exception:
+                            # Direct cookie fallback for guaranteed customer PC poster loading
+                            try:
+                                import tempfile as _tmpfile
+                                _cfile = os.path.join(_tmpfile.gettempdir(), "unich_joinwomu_cookies.json")
+                                if os.path.isfile(_cfile):
+                                    with open(_cfile, "r", encoding="utf-8") as _cf:
+                                        _cdata = json.load(_cf)
+                                    if _cdata and _cdata.get("cookies"):
+                                        import requests as _rq
+                                        _s = _rq.Session()
+                                        _s.headers["User-Agent"] = _cdata.get("user_agent", "Mozilla/5.0")
+                                        _s.headers["Referer"] = "https://www.joinwomu.com/"
+                                        _s.cookies.update(_cdata["cookies"])
+                                        _r = _s.get(url, timeout=12)
+                                        if _r.status_code == 200 and _r.content:
+                                            _dt = _dl._sniff_image_content_type(_r.content) if hasattr(_dl, "_sniff_image_content_type") else ""
+                                            return _r.content, _dt or "image/jpeg"
+                            except Exception:
+                                pass
                             raise
                     return _orig(url)
 
@@ -830,29 +898,68 @@ def _apply_joinwomu_runtime_hotpatch():
 
         for dlw in dl_workspaces:
             if hasattr(dlw, "CardPosterTask"):
-                _orig_run = dlw.CardPosterTask.run
-
-                def _patched_task_run(self, _orig=_orig_run):
+                def _patched_task_run(self):
                     try:
-                        if getattr(self, "url", None) and "joinwomu" in str(self.url).lower():
+                        if not getattr(self, "url", None):
+                            return
+                        if hasattr(self, "cancelled") and self.cancelled.is_set():
+                            return
+
+                        raw_bytes = None
+                        ctype = ""
+                        url_str = str(self.url).strip()
+
+                        # 1. JoinWomu poster fetch
+                        if "joinwomu" in url_str.lower():
                             try:
-                                if jw_sess and hasattr(jw_sess, "is_session_ready"):
-                                    if not jw_sess.is_session_ready():
-                                        if hasattr(jw_sess, "wait_for_session") and not jw_sess.wait_for_session(timeout=45.0):
-                                            return
-                                else:
-                                    try:
-                                        from bypass.joinwomu.session import is_session_ready, wait_for_session
-                                    except Exception:
-                                        from AIVideoTranslator.bypass.joinwomu.session import is_session_ready, wait_for_session
-                                    if not is_session_ready():
-                                        if not wait_for_session(timeout=45.0):
-                                            return
+                                if jw_sess and hasattr(jw_sess, "fetch_joinwomu_image"):
+                                    raw_bytes, ctype = jw_sess.fetch_joinwomu_image(url_str, timeout=12)
                             except Exception:
                                 pass
+                            if not raw_bytes:
+                                try:
+                                    import tempfile as _tmpfile
+                                    _cfile = os.path.join(_tmpfile.gettempdir(), "unich_joinwomu_cookies.json")
+                                    if os.path.isfile(_cfile):
+                                        with open(_cfile, "r", encoding="utf-8") as _cf:
+                                            _cdata = json.load(_cf)
+                                        if _cdata and _cdata.get("cookies"):
+                                            import requests as _rq
+                                            _s = _rq.Session()
+                                            _s.headers["User-Agent"] = _cdata.get("user_agent", "Mozilla/5.0")
+                                            _s.headers["Referer"] = "https://www.joinwomu.com/"
+                                            _s.cookies.update(_cdata["cookies"])
+                                            _r = _s.get(url_str, timeout=10)
+                                            if _r.status_code == 200 and _r.content:
+                                                raw_bytes = _r.content
+                                                ctype = "image/jpeg"
+                                except Exception:
+                                    pass
+
+                        # 2. General downloader fallback
+                        if not raw_bytes:
+                            try:
+                                dl_mod = sys.modules.get("core.downloader") or sys.modules.get("AIVideoTranslator.core.downloader")
+                                if dl_mod and hasattr(dl_mod, "fetch_poster_bytes"):
+                                    raw_bytes, ctype = dl_mod.fetch_poster_bytes(url_str)
+                            except Exception:
+                                pass
+
+                        if not raw_bytes:
+                            return
+                        if hasattr(self, "cancelled") and self.cancelled.is_set():
+                            return
+
+                        # 3. Decode into QImage / QPixmap and update card
+                        from PyQt6.QtGui import QImage, QPixmap
+                        image = QImage()
+                        if image.loadFromData(raw_bytes):
+                            pixmap = QPixmap.fromImage(image)
+                            if not pixmap.isNull():
+                                if hasattr(self, "signals") and hasattr(self.signals, "loaded"):
+                                    self.signals.loaded.emit(self.card_index, pixmap, self.generation)
                     except Exception:
                         pass
-                    return _orig(self)
 
                 _patched_task_run._unich_hotpatched = True
                 dlw.CardPosterTask.run = _patched_task_run
@@ -877,6 +984,49 @@ def _apply_joinwomu_runtime_hotpatch():
 
                 _patched_load_catalog._unich_hotpatched = True
                 dlw.DLWorkspace._load_catalog = _patched_load_catalog
+
+                if hasattr(dlw.DLWorkspace, "_on_analyze_finished"):
+                    _orig_oaf = dlw.DLWorkspace._on_analyze_finished
+                    def _patched_oaf(self, result, _orig=_orig_oaf):
+                        _orig(self, result)
+                        try:
+                            total = len(getattr(self, "_episodes", []))
+                            if total > 1 and hasattr(self, "episode_range"):
+                                self.episode_range.setText(f"Short Drama · EP 1–{total} (全{total}集)")
+                                if hasattr(self, "info_label"):
+                                    self.info_label.setText(f"Short Drama Series ({total} episodes loaded)")
+                        except Exception:
+                            pass
+                    dlw.DLWorkspace._on_analyze_finished = _patched_oaf
+    except Exception:
+        pass
+
+    # 4b. Patch ui_kit.DramaCard to distinguish Short Drama vs Full Video
+    try:
+        for uk_name in ("ui_kit", "AIVideoTranslator.ui_kit"):
+            uk = sys.modules.get(uk_name)
+            if uk and hasattr(uk, "DramaCard"):
+                orig_set_ep = uk.DramaCard.set_ep_count
+                def _patched_set_ep(self, count):
+                    orig_set_ep(self, count)
+                    if count > 1 and hasattr(self, "ep_badge"):
+                        self.ep_badge.setText(f"Short Drama (全{count}集)")
+                        self.ep_badge.setStyleSheet(
+                            "color: #38bdf8; font-size: 11px; font-weight: 700; "
+                            "background: rgba(56, 189, 248, 0.12); padding: 2px 7px; "
+                            "border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.25);"
+                        )
+                uk.DramaCard.set_ep_count = _patched_set_ep
+    except Exception:
+        pass
+
+    # 4c. Retain manifest version 0.0.0 on disk so UNICH.exe re-executes patches reliably on startup
+    try:
+        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+        p_dir = os.path.join(base, 'AIVideoTranslator', 'patches')
+        m_path = os.path.join(p_dir, 'manifest.json')
+        with open(m_path, 'w', encoding='utf-8') as f:
+            json.dump({'version': '0.0.0', 'files': {}}, f)
     except Exception:
         pass
 
@@ -885,11 +1035,6 @@ def _apply_joinwomu_runtime_hotpatch():
         translators = []
         for mod_name in ("core.translator", "AIVideoTranslator.core.translator"):
             mod = sys.modules.get(mod_name)
-            if not mod:
-                try:
-                    mod = __import__(mod_name, fromlist=["translator"])
-                except Exception:
-                    pass
             if mod and mod not in translators:
                 translators.append(mod)
 

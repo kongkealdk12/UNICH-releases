@@ -1,5 +1,5 @@
 {
-  "version": "6.5.5",
+  "version": "6.5.7",
   "files": {
     "nisay_gateway.py": "nisay_gateway.py",
     "joinwomu_session.py": "joinwomu_session.py"

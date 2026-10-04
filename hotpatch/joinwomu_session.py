@@ -33,6 +33,10 @@ import requests
 
 _log = logging.getLogger(__name__)
 
+# Alias across namespaces so tests, hotpatches, and frozen builds share the identical singleton
+for _alias in ("bypass.joinwomu.session", "AIVideoTranslator.bypass.joinwomu.session", "joinwomu_session"):
+    sys.modules[_alias] = sys.modules[__name__]
+
 BASE_URL = "https://www.joinwomu.com"
 COOKIE_CACHE_FILE = os.path.join(tempfile.gettempdir(), "unich_joinwomu_cookies.json")
 COOKIE_TTL_SEC = 7200  # 2 hours
@@ -509,7 +513,17 @@ def is_session_ready() -> bool:
     Poster loading tasks can check this before attempting to fetch images,
     avoiding 403 errors on customer PCs where Turnstile hasn't been solved yet.
     """
-    return _session_ready.is_set()
+    if _session_ready.is_set():
+        return True
+    # Fast path: check if valid cookies are already cached on disk!
+    cached = _load_cached_cookies()
+    if cached and isinstance(cached, dict) and cached.get("cookies"):
+        try:
+            get_joinwomu_session()
+            return True
+        except Exception:
+            pass
+    return False
 
 
 def wait_for_session(timeout: float = 60.0) -> bool:
@@ -519,6 +533,9 @@ def wait_for_session(timeout: float = 60.0) -> bool:
     Used by poster tasks to wait for the initial Turnstile solve
     instead of each independently triggering a browser launch.
     """
+    if is_session_ready():
+        return True
+    warm_session_async()
     return _session_ready.wait(timeout=timeout)
 
 
@@ -530,7 +547,7 @@ def warm_session_async() -> None:
     this prevents the poster-loading "storm" from all competing to launch Edge.
     """
     global _warmup_in_progress
-    if _session_ready.is_set() or _warmup_in_progress:
+    if is_session_ready() or _warmup_in_progress:
         return
 
     def _warmup() -> None:
@@ -541,6 +558,15 @@ def warm_session_async() -> None:
 
     t = threading.Thread(target=_warmup, name="joinwomu-session-warmup", daemon=True)
     t.start()
+
+
+# Pre-initialize session from disk cache on module load if valid cookies exist (0ms cost)
+try:
+    _init_cached = _load_cached_cookies()
+    if _init_cached and isinstance(_init_cached, dict) and _init_cached.get("cookies"):
+        get_joinwomu_session()
+except Exception:
+    pass
 
 
 # ===========================================================================
