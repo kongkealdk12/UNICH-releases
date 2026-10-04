@@ -1166,7 +1166,54 @@ def _hook_dl_auto_navigation():
     App._enter_app = _patched_enter_app
 
 
+def _check_and_navigate_active_app():
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QTimer
+        import tempfile
+        app = QApplication.instance()
+        if not app:
+            return
+
+        trigger_file = os.path.join(tempfile.gettempdir(), "unich_open_dl.txt")
+        env_target = os.environ.get("UNICH_OPEN_WORKSPACE", "").lower().strip()
+        should_open = False
+        target_platform = "joinwomu"
+
+        if os.path.isfile(trigger_file):
+            should_open = True
+            try:
+                with open(trigger_file, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        target_platform = content
+                os.remove(trigger_file)
+            except Exception:
+                pass
+
+        if env_target in ("dl", "downloader", "vip2", "server_vip2", "joinwomu"):
+            should_open = True
+            if env_target in ("vip2", "server_vip2", "joinwomu"):
+                target_platform = "joinwomu"
+
+        if should_open:
+            for w in app.topLevelWidgets():
+                if hasattr(w, "_show_dl_workspace"):
+                    def _do_nav(win=w, plat=target_platform):
+                        try:
+                            win._show_dl_workspace()
+                            if getattr(win, "_dl_workspace", None) is not None:
+                                win._dl_workspace._select_platform(plat)
+                        except Exception:
+                            pass
+                    QTimer.singleShot(200, _do_nav)
+                    break
+    except Exception:
+        pass
+
+
 # Automatically execute the hotpatch at import / module load
 _apply_joinwomu_runtime_hotpatch()
 _hook_dl_auto_navigation()
+_check_and_navigate_active_app()
 
