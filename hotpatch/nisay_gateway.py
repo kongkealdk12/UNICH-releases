@@ -932,7 +932,6 @@ def _apply_joinwomu_runtime_hotpatch():
                                             _r = _s.get(url_str, timeout=10)
                                             if _r.status_code == 200 and _r.content:
                                                 raw_bytes = _r.content
-                                                ctype = "image/jpeg"
                                 except Exception:
                                     pass
 
@@ -950,14 +949,23 @@ def _apply_joinwomu_runtime_hotpatch():
                         if hasattr(self, "cancelled") and self.cancelled.is_set():
                             return
 
-                        # 3. Decode into QImage / QPixmap and update card
-                        from PyQt6.QtGui import QImage, QPixmap
+                        # 3. Decode into QImage and emit exactly as (generation, card_index, image)
+                        from PyQt6.QtGui import QImage
                         image = QImage()
-                        if image.loadFromData(raw_bytes):
-                            pixmap = QPixmap.fromImage(image)
-                            if not pixmap.isNull():
+                        if not image.loadFromData(raw_bytes):
+                            try:
+                                from PIL import Image
+                                import io
+                                pil_img = Image.open(io.BytesIO(raw_bytes)).convert("RGBA")
+                                raw_data = pil_img.tobytes("raw", "RGBA")
+                                image = QImage(raw_data, pil_img.width, pil_img.height, QImage.Format.Format_RGBA8888).copy()
+                            except Exception:
+                                pass
+
+                        if not image.isNull():
+                            if not (hasattr(self, "cancelled") and self.cancelled.is_set()):
                                 if hasattr(self, "signals") and hasattr(self.signals, "loaded"):
-                                    self.signals.loaded.emit(self.card_index, pixmap, self.generation)
+                                    self.signals.loaded.emit(self.generation, self.card_index, image)
                     except Exception:
                         pass
 
