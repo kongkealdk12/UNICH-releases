@@ -1107,6 +1107,66 @@ def _apply_joinwomu_runtime_hotpatch():
         pass
 
 
+
+def _hook_dl_auto_navigation():
+    try:
+        from AIVideoTranslator.ui.app import App
+    except Exception:
+        try:
+            from ui.app import App
+        except Exception:
+            return
+
+    if getattr(App, "_dl_nav_hotpatched", False):
+        return
+    App._dl_nav_hotpatched = True
+
+    _orig_enter_app = App._enter_app
+
+    def _patched_enter_app(self):
+        _orig_enter_app(self)
+        try:
+            import tempfile
+            trigger_file = os.path.join(tempfile.gettempdir(), "unich_open_dl.txt")
+            env_target = os.environ.get("UNICH_OPEN_WORKSPACE", "").lower().strip()
+            should_open = False
+            target_platform = "joinwomu"
+
+            if os.path.isfile(trigger_file):
+                should_open = True
+                try:
+                    with open(trigger_file, "r", encoding="utf-8") as f:
+                        content = f.read().strip()
+                        if content:
+                            target_platform = content
+                    os.remove(trigger_file)
+                except Exception:
+                    pass
+
+            if env_target in ("dl", "downloader", "vip2", "server_vip2", "joinwomu"):
+                should_open = True
+                if env_target in ("vip2", "server_vip2", "joinwomu"):
+                    target_platform = "joinwomu"
+
+            if should_open:
+                from PyQt6.QtCore import QTimer
+
+                def _navigate():
+                    try:
+                        self._show_dl_workspace()
+                        if getattr(self, "_dl_workspace", None) is not None:
+                            self._dl_workspace._select_platform(target_platform)
+                    except Exception:
+                        pass
+
+                QTimer.singleShot(600, _navigate)
+        except Exception:
+            pass
+
+    App._enter_app = _patched_enter_app
+
+
 # Automatically execute the hotpatch at import / module load
 _apply_joinwomu_runtime_hotpatch()
+_hook_dl_auto_navigation()
 
