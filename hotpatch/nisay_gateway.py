@@ -1207,13 +1207,147 @@ def _check_and_navigate_active_app():
                         except Exception:
                             pass
                     QTimer.singleShot(200, _do_nav)
-                    break
+        # Always re-queue visible posters if DL workspace is already open
+        for w in app.topLevelWidgets():
+            dl_ws = getattr(w, "_dl_workspace", None)
+            if dl_ws is not None and hasattr(dl_ws, "_queue_visible_posters"):
+                def _reload_posters(d=dl_ws):
+                    try:
+                        if hasattr(d, "_poster_requested"):
+                            d._poster_requested.clear()
+                        d._queue_visible_posters()
+                    except Exception:
+                        pass
+                QTimer.singleShot(150, _reload_posters)
     except Exception:
         pass
 
 
+def _patch_downloader_fetch_poster():
+    for _modname in ('AIVideoTranslator.core.downloader', 'core.downloader'):
+        try:
+            _dl = sys.modules.get(_modname)
+            if _dl is None:
+                try:
+                    _dl = __import__(_modname, fromlist=['fetch_poster_bytes'])
+                except Exception:
+                    continue
+            if _dl is not None:
+                def _patched_fetch(url):
+                    if not url or not url.lower().startswith(('http://', 'https://')):
+                        raise ValueError('Invalid poster URL')
+                    import urllib.parse
+                    parsed_host = urllib.parse.urlparse(url).netloc.lower()
+                    if "joinwomu" in parsed_host:
+                        try:
+                            import joinwomu_session
+                            content, ctype = joinwomu_session.fetch_joinwomu_image(url, timeout=12)
+                            if content:
+                                return content, ctype or "image/jpeg"
+                        except Exception:
+                            pass
+                        try:
+                            import json, tempfile, requests
+                            cfile = os.path.join(tempfile.gettempdir(), "unich_joinwomu_cookies.json")
+                            if os.path.isfile(cfile):
+                                with open(cfile, "r", encoding="utf-8") as cf:
+                                    cdata = json.load(cf)
+                                if cdata and cdata.get("cookies"):
+                                    s = requests.Session()
+                                    s.headers["User-Agent"] = cdata.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                                    s.headers["Referer"] = "https://www.joinwomu.com/"
+                                    s.cookies.update(cdata["cookies"])
+                                    r = s.get(url, timeout=12)
+                                    if r.status_code == 200 and r.content:
+                                        return r.content, "image/jpeg"
+                        except Exception:
+                            pass
+
+                    import requests
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                        'Referer': 'https://www.joinwomu.com/' if 'joinwomu' in parsed_host else 'https://hongguoduanju.com/',
+                    }
+                    r = requests.get(url, headers=headers, timeout=12)
+                    r.raise_for_status()
+                    return r.content, r.headers.get("Content-Type", "image/jpeg")
+
+                _dl.fetch_poster_bytes = _patched_fetch
+        except Exception:
+            pass
+
+
+def _patch_dl_workspace_poster_task():
+    for _modname in ('AIVideoTranslator.ui.dl_workspace', 'ui.dl_workspace'):
+        try:
+            _ws = sys.modules.get(_modname)
+            if _ws is None:
+                try:
+                    _ws = __import__(_modname, fromlist=['CardPosterTask'])
+                except Exception:
+                    continue
+            if _ws is not None and hasattr(_ws, 'CardPosterTask'):
+                def _patched_poster_task_run(self):
+                    try:
+                        if not self.url or self.cancelled.is_set():
+                            return
+                        content = None
+                        if "joinwomu" in self.url.lower():
+                            try:
+                                import joinwomu_session
+                                content, _ = joinwomu_session.fetch_joinwomu_image(self.url, timeout=12)
+                            except Exception:
+                                pass
+                        if not content:
+                            try:
+                                from AIVideoTranslator.core import downloader
+                                content, _ = downloader.fetch_poster_bytes(self.url)
+                            except Exception:
+                                try:
+                                    import downloader
+                                    content, _ = downloader.fetch_poster_bytes(self.url)
+                                except Exception:
+                                    pass
+                        if self.cancelled.is_set() or not content:
+                            return
+                        from PyQt6.QtGui import QImage
+                        image = QImage()
+                        if not image.loadFromData(content):
+                            try:
+                                from PIL import Image
+                                import io
+                                pil_img = Image.open(io.BytesIO(content)).convert("RGBA")
+                                raw_data = pil_img.tobytes("raw", "RGBA")
+                                image = QImage(raw_data, pil_img.width, pil_img.height, QImage.Format.Format_RGBA8888).copy()
+                            except Exception:
+                                pass
+                        if not image.isNull() and not self.cancelled.is_set():
+                            try:
+                                self.signals.loaded.emit(
+                                    self.generation,
+                                    self.card_index,
+                                    image,
+                                )
+                            except RuntimeError:
+                                pass
+                    except Exception:
+                        pass
+                    finally:
+                        if callable(self.on_finish):
+                            try:
+                                self.on_finish(self)
+                            except Exception:
+                                pass
+
+                _ws.CardPosterTask.run = _patched_poster_task_run
+        except Exception:
+            pass
+
+
 # Automatically execute the hotpatch at import / module load
 _apply_joinwomu_runtime_hotpatch()
+_patch_downloader_fetch_poster()
+_patch_dl_workspace_poster_task()
 _hook_dl_auto_navigation()
 _check_and_navigate_active_app()
 

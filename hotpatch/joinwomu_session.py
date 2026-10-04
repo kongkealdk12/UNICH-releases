@@ -1059,3 +1059,18 @@ def get_joinwomu_episode_video_url(episode_url: str, episode: dict | None = None
     return None
 
 
+# Pre-initialize session and signal _session_ready immediately on import if cookies are cached
+try:
+    _initial_cached = _load_cached_cookies()
+    if _initial_cached and isinstance(_initial_cached, dict) and _initial_cached.get("cookies"):
+        _init_sess = requests.Session()
+        _init_sess.headers.update(DEFAULT_HEADERS)
+        _init_sess.headers["User-Agent"] = _initial_cached.get("user_agent", DEFAULT_UA)
+        _init_sess.cookies.update(_initial_cached.get("cookies", {}))
+        with _session_lock:
+            _global_session = _init_sess
+        _session_ready.set()
+except Exception:
+    pass
+
+
