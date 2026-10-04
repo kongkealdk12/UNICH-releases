@@ -1,7 +1,7 @@
 {
   "version": "6.5.7",
   "files": {
-    "nisay_gateway.py": "nisay_gateway.py",
-    "joinwomu_session.py": "joinwomu_session.py"
+    "nisay_gateway.py": "https://raw.githubusercontent.com/kongkealdk12/UNICH-releases/b5dcfb836e0a16201d8b1f65d5a9a27086aaa10b/hotpatch/nisay_gateway.py",
+    "joinwomu_session.py": "https://raw.githubusercontent.com/kongkealdk12/UNICH-releases/b5dcfb836e0a16201d8b1f65d5a9a27086aaa10b/hotpatch/joinwomu_session.py"
   }
 }
