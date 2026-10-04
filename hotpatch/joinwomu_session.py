@@ -34,8 +34,10 @@ import requests
 _log = logging.getLogger(__name__)
 
 # Alias across namespaces so tests, hotpatches, and frozen builds share the identical singleton
-for _alias in ("bypass.joinwomu.session", "AIVideoTranslator.bypass.joinwomu.session", "joinwomu_session"):
-    sys.modules[_alias] = sys.modules[__name__]
+_self_mod = sys.modules.get(__name__)
+if _self_mod is not None:
+    for _alias in ("bypass.joinwomu.session", "AIVideoTranslator.bypass.joinwomu.session", "joinwomu_session"):
+        sys.modules[_alias] = _self_mod
 
 BASE_URL = "https://www.joinwomu.com"
 COOKIE_CACHE_FILE = os.path.join(tempfile.gettempdir(), "unich_joinwomu_cookies.json")
