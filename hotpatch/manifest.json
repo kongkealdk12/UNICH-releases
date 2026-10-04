@@ -1,7 +1,7 @@
 {
-  "version": "6.5.8",
+  "version": "6.5.9",
   "files": {
-    "nisay_gateway.py": "https://raw.githubusercontent.com/kongkealdk12/UNICH-releases/64dc8e0bd38237fd8acbb611ad073be28109b159/hotpatch/nisay_gateway.py",
-    "joinwomu_session.py": "https://raw.githubusercontent.com/kongkealdk12/UNICH-releases/64dc8e0bd38237fd8acbb611ad073be28109b159/hotpatch/joinwomu_session.py"
+    "nisay_gateway.py": "https://raw.githubusercontent.com/kongkealdk12/UNICH-releases/0f17512f0526664c922746b2e80bd9ee6e895521/hotpatch/nisay_gateway.py",
+    "joinwomu_session.py": "https://raw.githubusercontent.com/kongkealdk12/UNICH-releases/0f17512f0526664c922746b2e80bd9ee6e895521/hotpatch/joinwomu_session.py"
   }
 }
