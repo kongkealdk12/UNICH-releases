@@ -728,28 +728,27 @@ def _apply_joinwomu_runtime_hotpatch():
                         bypass_mod = None
 
             if bypass_mod is not None:
-                bypass_mod.joinwomu = jw_sess
-                if 'bypass' not in sys.modules or not hasattr(sys.modules['bypass'], '__path__'):
-                    sys.modules['bypass'] = bypass_mod
-                if 'AIVideoTranslator.bypass' not in sys.modules or not hasattr(sys.modules['AIVideoTranslator.bypass'], '__path__'):
-                    sys.modules['AIVideoTranslator.bypass'] = bypass_mod
-            else:
-                dummy_bypass = types.ModuleType('bypass')
-                _this_dir = os.path.dirname(os.path.abspath(__file__))
-                for _c in (os.path.join(_this_dir, '..', 'bypass'), os.path.join(p_dir, '..', 'bypass')):
-                    if os.path.isdir(_c):
-                        dummy_bypass.__path__ = [os.path.abspath(_c)]
-                        break
-                dummy_bypass.joinwomu = jw_sess
-                if 'bypass' not in sys.modules or not hasattr(sys.modules['bypass'], '__path__'):
-                    sys.modules['bypass'] = dummy_bypass
-                if 'AIVideoTranslator.bypass' not in sys.modules or not hasattr(sys.modules['AIVideoTranslator.bypass'], '__path__'):
-                    sys.modules['AIVideoTranslator.bypass'] = dummy_bypass
+                try:
+                    bypass_mod.joinwomu = jw_sess
+                except Exception:
+                    pass
 
+            # Safe submodule registration: Never assign dummy_bypass to sys.modules['bypass']!
             sys.modules['bypass.joinwomu'] = jw_sess
+            sys.modules['bypass.joinwomu.session'] = jw_sess
             sys.modules['bypass.joinwomu.catalog'] = jw_sess
             sys.modules['AIVideoTranslator.bypass.joinwomu'] = jw_sess
+            sys.modules['AIVideoTranslator.bypass.joinwomu.session'] = jw_sess
             sys.modules['AIVideoTranslator.bypass.joinwomu.catalog'] = jw_sess
+
+            # If real bypass package is in sys.modules, attach joinwomu to it
+            for _mname in ('bypass', 'AIVideoTranslator.bypass'):
+                _m = sys.modules.get(_mname)
+                if _m is not None and hasattr(_m, '__path__'):
+                    try:
+                        setattr(_m, 'joinwomu', jw_sess)
+                    except Exception:
+                        pass
 
             # Cross-reference submodules on jw_sess itself
             jw_sess.session = jw_sess
