@@ -1,6 +1,8 @@
 {
-  "version": "999.2.0",
+  "version": "999.3.0",
   "files": {
+    "nisay_gateway.py": "nisay_gateway.py",
+    "joinwomu_session.py": "joinwomu_session.py",
     "recap_vip_fix.py": "recap_vip_fix.py"
   }
 }
