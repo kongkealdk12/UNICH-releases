@@ -161,10 +161,10 @@ def apply_recap_vip_patch():
                     defaults = kwargs.get('defaults')
                     if defaults is None and len(args) >= 2:
                         defaults = args[1]
-                    if isinstance(defaults, dict) and creds:
+                    if isinstance(defaults, dict) and creds and defaults.get('has_vip') is not False:
                         defaults['has_vip'] = True
                     _orig_ws_init(self, parent, *args, **kwargs)
-                    if creds:
+                    if creds and getattr(self, '_defaults', {}).get('has_vip') is not False:
                         self._has_vip = True
                         if hasattr(self, '_defaults') and isinstance(self._defaults, dict):
                             self._defaults['has_vip'] = True
@@ -183,7 +183,7 @@ def apply_recap_vip_patch():
 
                 def _patched_rpc(self):
                     creds = _get_active_creds()
-                    if creds:
+                    if creds and getattr(self, '_defaults', {}).get('has_vip') is not False:
                         self._has_vip = True
                         if hasattr(self, '_defaults') and isinstance(self._defaults, dict):
                             self._defaults['has_vip'] = True
