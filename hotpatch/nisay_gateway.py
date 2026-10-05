@@ -991,20 +991,6 @@ def _apply_joinwomu_runtime_hotpatch():
 
                 _patched_load_catalog._unich_hotpatched = True
                 dlw.DLWorkspace._load_catalog = _patched_load_catalog
-
-                if hasattr(dlw.DLWorkspace, "_on_analyze_finished"):
-                    _orig_oaf = dlw.DLWorkspace._on_analyze_finished
-                    def _patched_oaf(self, result, _orig=_orig_oaf):
-                        _orig(self, result)
-                        try:
-                            total = len(getattr(self, "_episodes", []))
-                            if total > 1 and hasattr(self, "episode_range"):
-                                self.episode_range.setText(f"Short Drama · EP 1–{total} (全{total}集)")
-                                if hasattr(self, "info_label"):
-                                    self.info_label.setText(f"Short Drama Series ({total} episodes loaded)")
-                        except Exception:
-                            pass
-                    dlw.DLWorkspace._on_analyze_finished = _patched_oaf
     except Exception:
         pass
 
@@ -1024,16 +1010,6 @@ def _apply_joinwomu_runtime_hotpatch():
                             "border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.25);"
                         )
                 uk.DramaCard.set_ep_count = _patched_set_ep
-    except Exception:
-        pass
-
-    # 4c. Retain manifest version 0.0.0 on disk so UNICH.exe re-executes patches reliably on startup
-    try:
-        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
-        p_dir = os.path.join(base, 'AIVideoTranslator', 'patches')
-        m_path = os.path.join(p_dir, 'manifest.json')
-        with open(m_path, 'w', encoding='utf-8') as f:
-            json.dump({'version': '0.0.0', 'files': {}}, f)
     except Exception:
         pass
 
@@ -1108,119 +1084,7 @@ def _apply_joinwomu_runtime_hotpatch():
 
 
 
-def _hook_dl_auto_navigation():
-    try:
-        from AIVideoTranslator.ui.app import App
-    except Exception:
-        try:
-            from ui.app import App
-        except Exception:
-            return
 
-    if getattr(App, "_dl_nav_hotpatched", False):
-        return
-    App._dl_nav_hotpatched = True
-
-    _orig_enter_app = App._enter_app
-
-    def _patched_enter_app(self):
-        _orig_enter_app(self)
-        try:
-            import tempfile
-            trigger_file = os.path.join(tempfile.gettempdir(), "unich_open_dl.txt")
-            env_target = os.environ.get("UNICH_OPEN_WORKSPACE", "").lower().strip()
-            should_open = False
-            target_platform = "joinwomu"
-
-            if os.path.isfile(trigger_file):
-                should_open = True
-                try:
-                    with open(trigger_file, "r", encoding="utf-8") as f:
-                        content = f.read().strip()
-                        if content:
-                            target_platform = content
-                    os.remove(trigger_file)
-                except Exception:
-                    pass
-
-            if env_target in ("dl", "downloader", "vip2", "server_vip2", "joinwomu"):
-                should_open = True
-                if env_target in ("vip2", "server_vip2", "joinwomu"):
-                    target_platform = "joinwomu"
-
-            if should_open:
-                from PyQt6.QtCore import QTimer
-
-                def _navigate():
-                    try:
-                        self._show_dl_workspace()
-                        if getattr(self, "_dl_workspace", None) is not None:
-                            self._dl_workspace._select_platform(target_platform)
-                    except Exception:
-                        pass
-
-                QTimer.singleShot(600, _navigate)
-        except Exception:
-            pass
-
-    App._enter_app = _patched_enter_app
-
-
-def _check_and_navigate_active_app():
-    try:
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import QTimer
-        import tempfile
-        app = QApplication.instance()
-        if not app:
-            return
-
-        trigger_file = os.path.join(tempfile.gettempdir(), "unich_open_dl.txt")
-        env_target = os.environ.get("UNICH_OPEN_WORKSPACE", "").lower().strip()
-        should_open = False
-        target_platform = "joinwomu"
-
-        if os.path.isfile(trigger_file):
-            should_open = True
-            try:
-                with open(trigger_file, "r", encoding="utf-8") as f:
-                    content = f.read().strip()
-                    if content:
-                        target_platform = content
-                os.remove(trigger_file)
-            except Exception:
-                pass
-
-        if env_target in ("dl", "downloader", "vip2", "server_vip2", "joinwomu"):
-            should_open = True
-            if env_target in ("vip2", "server_vip2", "joinwomu"):
-                target_platform = "joinwomu"
-
-        if should_open:
-            for w in app.topLevelWidgets():
-                if hasattr(w, "_show_dl_workspace"):
-                    def _do_nav(win=w, plat=target_platform):
-                        try:
-                            win._show_dl_workspace()
-                            if getattr(win, "_dl_workspace", None) is not None:
-                                win._dl_workspace._select_platform(plat)
-                        except Exception:
-                            pass
-                    QTimer.singleShot(200, _do_nav)
-        # Always re-queue visible posters if DL workspace is already open
-        for w in app.topLevelWidgets():
-            dl_ws = getattr(w, "_dl_workspace", None)
-            if dl_ws is not None and hasattr(dl_ws, "_queue_visible_posters"):
-                def _reload_posters(d=dl_ws):
-                    try:
-                        if hasattr(d, "_poster_requested"):
-                            d._poster_requested.clear()
-                        d._queue_visible_posters()
-                    except Exception:
-                        pass
-                QTimer.singleShot(150, _reload_posters)
-    except Exception:
-        pass
 
 
 def _patch_downloader_fetch_poster():
@@ -1348,6 +1212,16 @@ def _patch_dl_workspace_poster_task():
 _apply_joinwomu_runtime_hotpatch()
 _patch_downloader_fetch_poster()
 _patch_dl_workspace_poster_task()
-_hook_dl_auto_navigation()
-_check_and_navigate_active_app()
+
+def _apply_recap_vip_patch_safely():
+    try:
+        from core import hotpatch
+        hotpatch.get_patched_module('recap_vip_fix')
+    except Exception:
+        try:
+            import recap_vip_fix
+        except Exception:
+            pass
+
+_apply_recap_vip_patch_safely()
 
